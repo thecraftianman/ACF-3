@@ -135,6 +135,7 @@ do -- Spawn and Update functions -----------------------
 		Entity.OutL         = Entity:WorldToLocal(Entity:GetAttachment(Entity:LookupAttachment("driveshaftL")).Pos)
 		Entity.OutR         = Entity:WorldToLocal(Entity:GetAttachment(Entity:LookupAttachment("driveshaftR")).Pos)
 		Entity.HitBoxes     = ACF.GetHitboxes(Gearbox.Model)
+		Entity.IsAutotread  = false -- true
 
 		WireIO.SetupInputs(Entity, Inputs, Data, Class, Gearbox)
 		WireIO.SetupOutputs(Entity, Outputs, Data, Class, Gearbox)
@@ -144,6 +145,13 @@ do -- Spawn and Update functions -----------------------
 		ACF.Activate(Entity, true)
 
 		Contraption.SetMass(Entity, Mass)
+
+		if Entity.IsAutotread then
+			timer.Simple(0, function()
+				--Entity:SetPos(Entity:GetPos() + Vector(0, 0, 96))
+				Entity:UpdateAutotread()
+			end)
+		end
 
 		Entity:ChangeGear(1)
 
@@ -567,7 +575,7 @@ do -- Linking ------------------------------------------
 		local OutPosWorld = Entity:LocalToWorld(OutPos)
 		local DrvAngle = (OutPosWorld - InPosWorld):GetNormalized():Dot((Entity:GetRight() * OutPos.y):GetNormalized())
 
-		if DrvAngle < 0.7 then return end
+		if not Entity.IsAutotread and DrvAngle < 0.7 then return end
 
 		local Rope
 
@@ -576,7 +584,11 @@ do -- Linking ------------------------------------------
 		end
 
 		local Phys = Target:GetPhysicsObject()
-		local Axis = Phys:WorldToLocalVector(Entity:GetRight())
+		local Axis = vector_origin
+
+		if IsValid(Phys) then
+			Axis = Phys:WorldToLocalVector(Entity:GetRight())
+		end
 
 		return {
 			Side = Side,
@@ -629,6 +641,323 @@ do -- Linking ------------------------------------------
 	ACF.RegisterClassLink("acf_gearbox", "prop_physics", LinkWheel)
 	ACF.RegisterClassLink("acf_gearbox", "acf_gearbox", LinkGearbox)
 	ACF.RegisterClassLink("acf_gearbox", "tire", LinkWheel)
+
+
+	local function LinkHoloWheel(Gearbox, Wheel)
+		if Gearbox.Wheels[Wheel] then return false, "This wheel is already linked to this gearbox!" end
+
+		local Link = GenerateLinkTable(Gearbox, Wheel)
+
+		--if not Link then return false, "Cannot link due to excessive driveshaft angle!" end
+
+		Link.LastVel   = 0
+		Link.AntiSpazz = 0
+		Link.IsBraking = false
+
+		Gearbox.Wheels[Wheel] = Link
+
+		Wheel:CallOnRemove("ACF_GearboxUnlink" .. Gearbox:EntIndex(), function()
+			if IsValid(Gearbox) then
+				Gearbox:Unlink(Wheel)
+			end
+		end)
+
+		return true, "Wheel linked successfully!"
+	end
+	ACF.RegisterClassLink("acf_gearbox", "gmod_wire_hologram", LinkWheel)
+
+	function ENT:ACF_OnParented(Entity, Connected, IsChild)
+		-- Ignore updating this when we parent the wheels to the gearbox
+		if not IsChild then return end
+		if not self.IsAutotread then return end
+		self:UpdateAutotread()
+	end
+
+	local Length         = 4 * 48
+			local Width          = 1 * 48
+			local RideHeight     = 36
+			local WheelCoef      = 25
+			local WheelDamping   = WheelCoef * 3
+			local FrictionCoef   = Vector(95, 1, 0)
+			local SamplesPerSide = 5
+			local Mins, Maxs     = Vector(-3, -3, 0), Vector(3, 3, 1)
+			local HoloAddPos     = Vector(0, 0, 10)
+			local HLength        = Length * -0.5
+			local Spread         = Length / (SamplesPerSide - 1)
+
+			local Wheels = {}
+			local Holos  = {}
+
+	-- TODO: Autotread
+		function ENT:UpdateAutotread()
+			if not self.IsAutotread then return end
+
+			local Parent = ACF.Contraption.GetAncestor(self)
+			local ParentMassCenter = vector_origin
+
+			if not IsValid(Parent) or Parent == self then
+				if next(Holos) ~= nil then
+					timer.Simple(0, function()
+						local Wheels = self.Wheels
+
+						for _, v in ipairs(Holos) do
+							if IsValid(v) then
+								v:Remove()
+							end
+							if Wheels and Wheels[v] then
+								Wheels[v] = nil
+							end
+						end
+					end)
+				end
+
+				return
+			end
+
+				local MinBounds, MaxBounds = Parent:GetCollisionBounds()
+				Length = MaxBounds.x + abs(MinBounds.x)
+				Width = MaxBounds.y + abs(MinBounds.y)
+				Spread = Length / (SamplesPerSide - 1)
+				HLength = Length * -0.5
+
+				local PhysObj = Parent:GetPhysicsObject()
+				if IsValid(PhysObj) then
+					ParentMassCenter = PhysObj:LocalToWorld(PhysObj:GetMassCenter())
+				end
+			--end
+
+			--self:SetPos(self:GetPos() + Vector(0, 0, 96))
+			--[[
+			local Length         = 4 * 48
+			local Width          = 1 * 48
+			local RideHeight     = 36
+			local WheelCoef      = 25
+			local WheelDamping   = WheelCoef * 3
+			local FrictionCoef   = Vector(95, 1, 0)
+			local SamplesPerSide = 5
+			local Mins, Maxs     = Vector(-3, -3, 0), Vector(3, 3, 1)
+			local HoloAddPos     = Vector(0, 0, 10)
+			local HLength        = Length * -0.5
+			local Spread         = Length / (SamplesPerSide - 1)
+
+			local Wheels = {}
+			local Holos  = {}
+			]]
+			for I = 1, SamplesPerSide * 2 do
+				--local LocalPos = I > SamplesPerSide and Vector(-Spread, Width * (I - SamplesPerSide), -10) or Vector(Spread, Width * I, -10)
+				local F = I > SamplesPerSide and HLength + (I - SamplesPerSide) * Spread or HLength + I * Spread
+				local LocalPos = I > SamplesPerSide and Vector(-Width, F, -RideHeight) or Vector(Width, F, -RideHeight)
+				local Pos = Parent:LocalToWorld(LocalPos)
+				local Ang = I > SamplesPerSide and self:LocalToWorldAngles(Angle(0, 90, 0)) or self:LocalToWorldAngles(Angle(0, -90, 0))
+				--Ang = Parent:AlignAngles(Ang, Parent:GetAngles())
+
+				local Model = "models/sprops/trans/miscwheels/tank20.mdl"
+
+				local E = ents.Create("gmod_wire_hologram")
+				E:SetModel(Model)
+				E:SetPos(Pos)
+				E:SetAngles(Ang)
+				E:Spawn()
+				E:CPPISetOwner(self:GetOwner())
+				E:SetParent(Parent or self)
+
+				Holos[I] = E
+				E.Contact = Vector()
+				E.Length = RideHeight
+				--[[
+				local Wheel = {
+					Length = RideHeight,
+					Contact = Vector(),
+					WorldHolo = holograms.create(Pos, Ang, "models/sprops/misc/bone_from_x.mdl"),
+					SuspHolo = holograms.create(Pos, Ang, "models/sprops/misc/bone_from_z.mdl")
+				}
+	
+				Wheel.SuspHolo:setColor(Color(360 / SamplesPerSide * I, 1, 1):hsvToRGB())
+				Wheel.SuspHolo:setMaterial("skybox/sky_fake_white")
+				Wheel.SuspHolo:setParent(E)
+				Wheel.WorldHolo:setColor(Color(360 / SamplesPerSide * I, 1, 1):hsvToRGB())
+				Wheel.WorldHolo:setParent(E)
+				Wheel.WorldHolo:setMaterial("skybox/sky_fake_white")
+	
+				Wheels[I] = Wheel
+				]]
+				self:Link(E)
+			end
+			--[[
+			timer.Simple(0.1, function()
+				for I = 1, SamplesPerSide do
+					local F = HLength + (I - 1) * Spread
+
+					do -- Left
+						local Start = self:LocalToWorld(Vector(Width, F, 0))
+						local End   = self:LocalToWorld(Vector(Width, F, -RideHeight))
+
+						local Trace = util.TraceHull({-- Start, End, Mins, Maxs, self)
+							start = Start,
+							endpos = End,
+							filter = self,
+							mins = Mins,
+							maxs = Maxs,
+						})
+
+						--applyWheelForce(Up, Trace, Wheels[I])
+
+						Holos[I]:SetPos(Trace.HitPos + HoloAddPos)
+					end
+
+					do -- Right
+						local Start = self:LocalToWorld(Vector(-Width, F, 0))
+						local End   = self:LocalToWorld(Vector(-Width, F,-RideHeight))
+
+						local Trace = util.TraceHull({-- Start, End, Mins, Maxs, self)
+							start = Start,
+							endpos = End,
+							filter = self,
+							mins = Mins,
+							maxs = Maxs,
+						})
+
+						--applyWheelForce(Up, Trace, Wheels[I + SamplesPerSide])
+
+						Holos[I + SamplesPerSide]:SetPos(Trace.HitPos + HoloAddPos)
+					end
+				end
+			end)
+			]]
+			self.AutotreadWheels = Holos
+			self.WheelParent = Parent
+			self:CallOnRemove("ACF_RemoveAutotreadWheels", function(Ent)
+				for _, v in ipairs(Ent.AutotreadWheels) do
+					if IsValid(v) then
+						v:Remove()
+					end
+				end
+			end)
+
+			timer.Simple(0, function()
+				--self:SetPos(self:GetPos() + Vector(0, 0, 96))
+				self:ApplyAutotreadForce()
+			end)
+		end
+
+		local function ApplyWheelForce(Parent, Up, Trace, Wheel)
+			if Trace.Hit then
+				--Wheel.Contact = Wheel.Contact or Trace.HitPos
+
+				local OldContact = Wheel.Contact or Trace.HitPos
+				local NewContact = Trace.HitPos
+				local ContactDisplacement = OldContact - NewContact
+
+				local OldLength   = Wheel.Length
+				local NewLength   = Trace.Fraction * RideHeight
+				local DeltaLength = NewLength - OldLength
+
+				Wheel.Length  = NewLength
+				Wheel.Contact = NewContact
+
+				local WheelForce = WheelCoef * (1 - Trace.Fraction) * RideHeight
+
+				local Suspension = Up * (WheelForce - DeltaLength * WheelDamping)
+
+				-- Attempting to localize the displacement ("friction") relative to the plate so that we can specify friction per-axis relative to the plate
+				local ParentAngles = Parent:GetAngles()
+				local LocalFriction = WorldToLocal(ContactDisplacement, angle_zero, vector_origin, ParentAngles) * FrictionCoef
+				local Friction = LocalToWorld(LocalFriction, angle_zero, vector_origin, ParentAngles)
+				--local Friction = ContactDisplacement * 15
+
+				Parent:ApplyForceOffset(Suspension + Friction + Vector(0, 0, 700), Trace.HitPos)
+				--Wheel:SetPos(Trace.HitPos + HoloAddPos)
+				--[[
+				do -- Debugging holograms
+				
+					Wheel.WorldHolo:setAngles(Friction:getAngle())
+					Wheel.WorldHolo:setScale(Vector(math.clamp(Friction:getLength() * 0.1, 0.1, 5), 0.25, 0.25))
+					Wheel.SuspHolo:setScale(Vector(0.25, 0.25, (WheelForce - DeltaLength * WheelDamping) * 0.01))
+					
+				end
+				]]
+			elseif Wheel.Contact then
+				Wheel.Contact = false
+				--Wheel.WorldHolo:setScale(Vector())
+				--Wheel.SuspHolo:setScale(Vector())
+			end
+		end
+
+		function ENT:ApplyAutotreadForce()
+			local Parent = self.WheelParent or self
+
+		if Parent ~= self then
+			local PhysObj = Parent:GetPhysicsObject()
+			local Up = Parent:GetUp()
+			local Velocity = Parent:GetVelocity():Length()
+			local VelocityAng = Angle(Velocity, Velocity, 0)
+			local I = 0
+
+			for Wheel, Link in pairs(self.Wheels) do -- for I = 1, SamplesPerSide do
+				I = I + 1
+
+				do -- Left
+					local Start --self:LocalToWorld(Vector(Width, F, 0))
+					local End --self:LocalToWorld(Vector(Width, F, -RideHeight))
+					local F --HLength + (I - 1) * Spread
+
+					if I > SamplesPerSide then
+						F = HLength + (I - 1 - SamplesPerSide) * Spread
+						Start = self:LocalToWorld(Vector(-Width, F, 0))
+						End = self:LocalToWorld(Vector(-Width, F, -RideHeight))
+					else
+						F = HLength + (I - 1) * Spread
+						Start = self:LocalToWorld(Vector(Width, F, 0))
+						End = self:LocalToWorld(Vector(Width, F, -RideHeight))
+					end
+
+					local Trace = util.TraceHull({-- Start, End, Mins, Maxs, self)
+						start = Start,
+						endpos = End,
+						filter = {self, Parent},
+						mins = Mins,
+						maxs = Maxs,
+					})
+
+					ApplyWheelForce(PhysObj, Up, Trace, Wheel)
+
+					Wheel:SetPos(Trace.HitPos + HoloAddPos)
+
+					if I > SamplesPerSide then
+						--Wheel:SetAngles(-VelocityAng)
+						Wheel:SetLocalAngularVelocity(-VelocityAng)
+					else
+						--Wheel:SetAngles(VelocityAng)
+						Wheel:SetLocalAngularVelocity(VelocityAng)
+					end
+				end
+				--[[
+				do -- Right
+					local Start = self:LocalToWorld(Vector(-Width, F, 0))
+					local End   = self:LocalToWorld(Vector(-Width, F,-RideHeight))
+
+					local Trace = util.TraceHull({-- Start, End, Mins, Maxs, self)
+						start = Start,
+						endpos = End,
+						filter = self,
+						mins = Mins,
+						maxs = Maxs,
+					})
+
+					applyWheelForce(ACF.Contraption.GetAncestor(Holos[I + SamplesPerSide]), Up, Trace, Wheel)
+
+					Holos[I + SamplesPerSide]:SetPos(Trace.HitPos + HoloAddPos)
+				end
+				]]
+			end
+		end
+			timer.Simple(engine.TickInterval(), function()
+				if not IsValid(self) then return end
+
+				self:ApplyAutotreadForce()
+			end)
+		end
+
 end ----------------------------------------------------
 
 do -- Unlinking ----------------------------------------
@@ -878,6 +1207,10 @@ do -- Movement -----------------------------------------
 			if IsValid(BoxPhys) then
 				BoxPhys:ApplyTorqueCenter(self:GetRight() * Clamp(2 * deg(ReactTq * MassRatio) * DeltaTime, -500000, 500000))
 			end
+		end
+
+		if self.IsAutotread then
+			self:ApplyAutotreadForce()
 		end
 
 		self.LastActive = Clock.CurTime

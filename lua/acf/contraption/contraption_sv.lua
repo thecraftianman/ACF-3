@@ -235,7 +235,7 @@ do -- ACF Parent Detouring
 				if not IsValid(self) then return end
 				local SavedParent
 				if (IsValid(self:GetParent()) and self:GetParent().ACF_OnParented) and not IsValid(Entity) then
-					self:GetParent():ACF_OnParented(self,false)
+					self:GetParent():ACF_OnParented(self, false, true)
 				end
 
 				if IsValid(Entity) then
@@ -253,7 +253,11 @@ do -- ACF Parent Detouring
 				SetParent(self, Entity, ...)
 
 				if IsValid(SavedParent) then
-					SavedParent:ACF_OnParented(self,true)
+					SavedParent:ACF_OnParented(self, true, false)
+				end
+
+				if self.ACF_OnParented then
+					self:ACF_OnParented(Entity, true, true)
 				end
 			end
 
